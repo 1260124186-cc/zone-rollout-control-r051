@@ -21,4 +21,12 @@ func (s *Server) routes(mux *http.ServeMux) {
 
 	mux.HandleFunc("PATCH /v1/plans/{id}/assessments", s.assessPlan)
 	mux.HandleFunc("GET /v1/plans/{id}/assessments/latest", s.latestAssessment)
+	mux.HandleFunc("GET /v1/assessments/{id}/annotations", s.listAssessmentAnnotations)
+
+	// Incident annotation timeline: append-only; no update or delete routes.
+	mux.HandleFunc("PUT /v1/annotations", s.appendAnnotation)
+	mux.HandleFunc("GET /v1/annotations", s.listAnnotations)
+	mux.HandleFunc("GET /v1/annotations/{id}", s.getAnnotation)
+	mux.HandleFunc("GET /v1/plans/{id}/annotations", s.listPlanAnnotations)
+	mux.HandleFunc("GET /v1/leases/{id}/annotations", s.listLeaseAnnotations)
 }

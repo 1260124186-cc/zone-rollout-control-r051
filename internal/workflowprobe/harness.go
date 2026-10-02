@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"solo-0014-zone-rollout-control/internal/allocation"
+	"solo-0014-zone-rollout-control/internal/annotation"
 	"solo-0014-zone-rollout-control/internal/assessment"
 	"solo-0014-zone-rollout-control/internal/fleet"
 	"solo-0014-zone-rollout-control/internal/httpapi"
@@ -23,12 +24,13 @@ import (
 )
 
 type harness struct {
-	baseURL  string
-	clock    *platform.ManualClock
-	client   *http.Client
-	server   *http.Server
-	listener net.Listener
-	tempDir  string
+	baseURL   string
+	clock     *platform.ManualClock
+	client    *http.Client
+	server    *http.Server
+	listener  net.Listener
+	tempDir   string
+	statePath string
 }
 
 func newHarness() (*harness, error) {
@@ -36,7 +38,8 @@ func newHarness() (*harness, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create temporary directory: %w", err)
 	}
-	stateStore, err := store.Open(tempDir + "/state.json")
+	statePath := tempDir + "/state.json"
+	stateStore, err := store.Open(statePath)
 	if err != nil {
 		_ = os.RemoveAll(tempDir)
 		return nil, fmt.Errorf("open temporary store: %w", err)
@@ -49,7 +52,8 @@ func newHarness() (*harness, error) {
 	allocations := allocation.New(stateStore, clock, ids)
 	probes := probe.New(stateStore, clock, ids, allocations)
 	assessments := assessment.New(stateStore, clock, ids)
-	api := httpapi.New(plans, nodes, allocations, probes, assessments, ids, logger)
+	annotations := annotation.New(stateStore, clock, ids)
+	api := httpapi.New(plans, nodes, allocations, probes, assessments, annotations, ids, logger)
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -61,13 +65,53 @@ func newHarness() (*harness, error) {
 		_ = server.Serve(listener)
 	}()
 	return &harness{
-		baseURL:  "http://" + listener.Addr().String(),
-		clock:    clock,
-		client:   &http.Client{Timeout: 10 * time.Second},
-		server:   server,
-		listener: listener,
-		tempDir:  tempDir,
+		baseURL:   "http://" + listener.Addr().String(),
+		clock:     clock,
+		client:    &http.Client{Timeout: 10 * time.Second},
+		server:    server,
+		listener:  listener,
+		tempDir:   tempDir,
+		statePath: statePath,
 	}, nil
+}
+
+// restart closes the running server and opens a fresh process against the
+// same snapshot, simulating a real restart while preserving the TCP port
+// through a brand new listener.
+func (h *harness) restart() error {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := h.server.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("stop server: %w", err)
+	}
+	_ = h.listener.Close()
+
+	stateStore, err := store.Open(h.statePath)
+	if err != nil {
+		return fmt.Errorf("reopen store: %w", err)
+	}
+	ids := platform.CryptoIDGenerator{}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	plans := plan.New(stateStore, h.clock, ids)
+	nodes := fleet.New(stateStore, h.clock, ids)
+	allocations := allocation.New(stateStore, h.clock, ids)
+	probes := probe.New(stateStore, h.clock, ids, allocations)
+	assessments := assessment.New(stateStore, h.clock, ids)
+	annotations := annotation.New(stateStore, h.clock, ids)
+	api := httpapi.New(plans, nodes, allocations, probes, assessments, annotations, ids, logger)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("listen: %w", err)
+	}
+	server := &http.Server{Handler: api.Handler(), ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	h.server = server
+	h.listener = listener
+	h.baseURL = "http://" + listener.Addr().String()
+	return nil
 }
 
 func (h *harness) close() {

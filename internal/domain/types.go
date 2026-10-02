@@ -142,6 +142,44 @@ type AuditEvent struct {
 	Attributes map[string]any `json:"attributes,omitempty"`
 }
 
+type AnnotationTargetType string
+
+const (
+	AnnotationTargetPlan       AnnotationTargetType = "plan"
+	AnnotationTargetLease      AnnotationTargetType = "lease"
+	AnnotationTargetAssessment AnnotationTargetType = "assessment"
+)
+
+type AnnotationCategory string
+
+const (
+	AnnotationCategoryObservation AnnotationCategory = "observation"
+	AnnotationCategoryRootCause   AnnotationCategory = "root_cause"
+	AnnotationCategoryAction      AnnotationCategory = "action"
+	AnnotationCategoryDecision    AnnotationCategory = "decision"
+	AnnotationCategoryEvidence    AnnotationCategory = "evidence"
+)
+
+// IncidentAnnotation is one append-only entry on the incident timeline. It
+// references a plan, lease, or assessment but never mutates any business
+// entity. Sequence is assigned in transaction commit order, so concurrent
+// appends still read back in one deterministic order.
+type IncidentAnnotation struct {
+	ID          string               `json:"id"`
+	Sequence    uint64               `json:"sequence"`
+	TargetType  AnnotationTargetType `json:"target_type"`
+	TargetID    string               `json:"target_id"`
+	PlanID      string               `json:"plan_id"`
+	Category    AnnotationCategory   `json:"category"`
+	Body        string               `json:"body"`
+	Actor       string               `json:"actor"`
+	RecordedAt  time.Time            `json:"recorded_at"`
+	Source      string               `json:"source"`
+	RequestID   string               `json:"request_id,omitempty"`
+	RequestKey  string               `json:"request_key,omitempty"`
+	Fingerprint string               `json:"fingerprint"`
+}
+
 type State struct {
 	SchemaVersion         int                          `json:"schema_version"`
 	Revision              uint64                       `json:"revision"`
@@ -155,6 +193,9 @@ type State struct {
 	LeaseRequestKeys      map[string]string            `json:"lease_request_keys"`
 	AssessmentRequestKeys map[string]string            `json:"assessment_request_keys"`
 	AuditEvents           []AuditEvent                 `json:"audit_events"`
+	Annotations           []IncidentAnnotation         `json:"annotations"`
+	AnnotationRequestKeys map[string]string            `json:"annotation_request_keys"`
+	AnnotationSequence    uint64                       `json:"annotation_sequence"`
 }
 
 type PageMeta struct {
@@ -170,4 +211,9 @@ type PlanPage struct {
 type NodePage struct {
 	Items []ResolverNode `json:"items"`
 	Meta  PageMeta       `json:"meta"`
+}
+
+type AnnotationPage struct {
+	Items []IncidentAnnotation `json:"items"`
+	Meta  PageMeta             `json:"meta"`
 }

@@ -45,6 +45,7 @@ internal/fleet              解析节点档案服务
 internal/allocation         节点选择和租约生命周期
 internal/probe              探针登记、幂等重放和租约完成
 internal/assessment         一致性聚合和最新结果查询
+internal/annotation         只追加事故批注时间线
 internal/httpapi            HTTP 路由、中间件和响应映射
 internal/workflowprobe      真实 HTTP 路径验证
 ```
@@ -135,6 +136,29 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
   -d '{"request_key": "assess-request-0001"}'
 ```
 
+记录事故批注（可关联计划、租约或判定，完成后的计划也能追加）：
+
+```bash
+curl -sS -X PUT http://127.0.0.1:8090/v1/annotations \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "target_type": "plan",
+    "target_id": "<plan_id>",
+    "category": "observation",
+    "body": "east 区域 12:04 起 SERVFAIL 升高，疑似上游 TTL 缓存陈旧",
+    "actor": "oncall-aria",
+    "request_key": "annotation-request-0001"
+  }'
+```
+
+按计划读取事故时间线（按提交序号升序，支持 `limit` 和 `cursor`）：
+
+```bash
+curl -sS http://127.0.0.1:8090/v1/plans/<plan_id>/annotations
+```
+
+`source` 和 `request_id` 由服务自动记录为操作事实，客户端不能提供。
+
 ## API 概览
 
 成功响应：
@@ -178,6 +202,12 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
 | `PATCH` | `/v1/leases/{id}/probes` | 登记探针并完成租约 |
 | `PATCH` | `/v1/plans/{id}/assessments` | 创建一致性判定 |
 | `GET` | `/v1/plans/{id}/assessments/latest` | 查询最近判定 |
+| `PUT` | `/v1/annotations` | 追加事故批注 |
+| `GET` | `/v1/annotations` | 读取全局事故时间线 |
+| `GET` | `/v1/annotations/{id}` | 查询单条批注 |
+| `GET` | `/v1/plans/{id}/annotations` | 按计划读取批注时间线 |
+| `GET` | `/v1/leases/{id}/annotations` | 按租约读取批注 |
+| `GET` | `/v1/assessments/{id}/annotations` | 按判定读取批注 |
 
 ## 状态及失败行为
 
@@ -188,6 +218,10 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
 - 一个节点同一时刻最多有一个 `claimed` 租约。
 - 相同请求键和相同内容可安全重放；同键异载荷返回 `idempotency_conflict`。
 - 一致性判定综合节点覆盖率、序列号、成功比例和最大延迟，返回 `consistent` 或 `review_required`。
+- 事故批注只追加，没有修改和删除入口；并发追加按互斥锁提交顺序分配连续序号，读取确定有序。
+- 批注只能关联存在的计划、租约或判定；不改变业务状态，任何状态下的批注都不影响判定结论，计划完成后仍可追加和查看。
+- 批注按关联对象使用 request_key 幂等：同键同内容重放返回原条目，同键异内容返回 `idempotency_conflict`。
+- 重启后时间线按序号重排、幂等索引重建、引用逐条校验闭合；断裂快照拒绝启动。
 - 所有校验和冲突在快照替换前返回，不留下部分状态。
 
 ## 后续工程任务的行为边界
@@ -216,6 +250,7 @@ go run ./cmd/workflowprobe plan-revision-lifecycle
 go run ./cmd/workflowprobe node-lease-allocation
 go run ./cmd/workflowprobe probe-ingestion
 go run ./cmd/workflowprobe consistency-assessment
+go run ./cmd/workflowprobe incident-annotation-timeline
 ```
 
 探针不访问外部网络，也不依赖已有状态文件。

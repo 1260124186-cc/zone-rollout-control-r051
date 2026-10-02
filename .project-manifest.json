@@ -39,6 +39,11 @@
       "responsibility": "probe aggregation, deterministic verdicts, and latest result reads"
     },
     {
+      "id": "annotation",
+      "path": "internal/annotation",
+      "responsibility": "append-only incident annotation timeline, idempotent replay, and ordered reads"
+    },
+    {
       "id": "domain",
       "path": "internal/domain",
       "responsibility": "entities, DNS value validation, transitions, and stable errors"
@@ -68,7 +73,8 @@
       "atomic_persistence",
       "error_propagation",
       "validation_boundary",
-      "concurrency"
+      "concurrency",
+      "append_only_timeline"
     ]
   },
   "workflows": [
@@ -151,6 +157,28 @@
         "httpapi",
         "assessment",
         "probe",
+        "domain",
+        "storage"
+      ]
+    },
+    {
+      "id": "incident-annotation-timeline",
+      "name": "Append-only incident annotation timeline",
+      "entry": "PUT /v1/annotations -> GET timeline endpoints",
+      "steps": [
+        "validate target, category, body, actor, and optional request key",
+        "verify the referenced plan, lease, or assessment exists inside the write transaction",
+        "append one immutable entry with a gapless commit sequence without touching business state",
+        "read the timeline in sequence order with cursor paging and target filters",
+        "replay identical requests and reject same-key different-content requests",
+        "restart the process and confirm ordering, replay, and reference closure survive"
+      ],
+      "success": "annotations are recorded in deterministic order against existing targets and remain readable after plan completion and restart",
+      "failure": "missing targets, invalid categories or bodies, and conflicting replays are rejected without history or business state changes",
+      "verification": "workflowprobe incident-annotation-timeline appends to all target types, checks replay, concurrent ordering, post-completion access, and restart closure",
+      "module_ids": [
+        "httpapi",
+        "annotation",
         "domain",
         "storage"
       ]

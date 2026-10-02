@@ -31,6 +31,9 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("decode snapshot: %w", err)
 		}
 		state = normalize(state)
+		if err := reconcileTimeline(&state); err != nil {
+			return nil, fmt.Errorf("reconcile annotation timeline: %w", err)
+		}
 	case errors.Is(err, os.ErrNotExist):
 		if err := replaceFile(path, state); err != nil {
 			return nil, fmt.Errorf("initialize snapshot: %w", err)

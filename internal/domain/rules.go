@@ -67,6 +67,22 @@ func ProbeFingerprint(leaseID string, input ProbeInput) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// AnnotationFingerprint covers the immutable content of an annotation. The
+// request key stays out of the fingerprint so a replay with the same key can
+// be matched to the original entry.
+func AnnotationFingerprint(input AnnotationInput) string {
+	payload := fmt.Sprintf(
+		"%s|%s|%s|%s|%s",
+		input.TargetType,
+		input.TargetID,
+		input.Category,
+		input.Actor,
+		input.Body,
+	)
+	sum := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(sum[:])
+}
+
 func BuildAssessment(
 	id string,
 	plan RolloutPlan,

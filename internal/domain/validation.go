@@ -16,6 +16,8 @@ const (
 	MinRequestKeyRunes = 8
 	MaxRequestKeyRunes = 64
 	MaxEntries         = 500
+	MaxActorRunes      = 120
+	MaxAnnotationRunes = 4000
 )
 
 type PlanCreateInput struct {
@@ -53,6 +55,15 @@ type ProbeInput struct {
 }
 
 type AssessmentInput struct {
+	RequestKey string `json:"request_key"`
+}
+
+type AnnotationInput struct {
+	TargetType string `json:"target_type"`
+	TargetID   string `json:"target_id"`
+	Category   string `json:"category"`
+	Body       string `json:"body"`
+	Actor      string `json:"actor"`
 	RequestKey string `json:"request_key"`
 }
 
@@ -247,6 +258,72 @@ func ValidateAssessmentInput(input AssessmentInput) error {
 		})
 	}
 	return nil
+}
+
+// NormalizeAnnotationInput trims the structured fields but preserves the
+// annotation body verbatim, apart from trimming surrounding whitespace.
+func NormalizeAnnotationInput(input AnnotationInput) AnnotationInput {
+	input.TargetType = strings.TrimSpace(strings.ToLower(input.TargetType))
+	input.TargetID = strings.TrimSpace(input.TargetID)
+	input.Category = strings.TrimSpace(strings.ToLower(input.Category))
+	input.Body = strings.TrimSpace(input.Body)
+	input.Actor = strings.TrimSpace(input.Actor)
+	input.RequestKey = strings.TrimSpace(input.RequestKey)
+	return input
+}
+
+func ValidateAnnotationInput(input AnnotationInput) error {
+	details := make(map[string]any)
+	switch AnnotationTargetType(input.TargetType) {
+	case AnnotationTargetPlan, AnnotationTargetLease, AnnotationTargetAssessment:
+	default:
+		details["target_type"] = "must be one of plan, lease, assessment"
+	}
+	if input.TargetID == "" {
+		details["target_id"] = "is required"
+	}
+	switch AnnotationCategory(input.Category) {
+	case AnnotationCategoryObservation,
+		AnnotationCategoryRootCause,
+		AnnotationCategoryAction,
+		AnnotationCategoryDecision,
+		AnnotationCategoryEvidence:
+	default:
+		details["category"] = "must be one of observation, root_cause, action, decision, evidence"
+	}
+	if bodyCount := utf8.RuneCountInString(input.Body); bodyCount < 1 || bodyCount > MaxAnnotationRunes {
+		details["body"] = "must contain between 1 and 4000 characters"
+	} else if containsControlRune(input.Body) {
+		details["body"] = "must not contain control characters"
+	}
+	if actorCount := utf8.RuneCountInString(input.Actor); actorCount < 1 || actorCount > MaxActorRunes {
+		details["actor"] = "must contain between 1 and 120 characters"
+	} else if containsControlRune(input.Actor) {
+		details["actor"] = "must not contain control characters"
+	}
+	if input.RequestKey != "" {
+		if err := validateRequestKey(input.RequestKey); err != nil {
+			details["request_key"] = err.Error()
+		}
+	}
+	if len(details) > 0 {
+		return Validation("annotation input is invalid", details)
+	}
+	return nil
+}
+
+// containsControlRune reports whether value holds an ASCII control character
+// other than tab, newline, or carriage return.
+func containsControlRune(value string) bool {
+	for _, r := range value {
+		if r < 0x20 && r != '\t' && r != '\n' && r != '\r' {
+			return true
+		}
+		if r == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 func validateRequestKey(value string) error {

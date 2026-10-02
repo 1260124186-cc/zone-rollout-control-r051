@@ -82,6 +82,23 @@ Zone Rollout Control 是面向 DNS 运维人员的 Go HTTP 控制面。它把区
 - `probe_count`、`success_count`、`success_ratio`、`maximum_latency_ms`。
 - `created_at`。
 
+### IncidentAnnotation
+
+事故批注时间线上的一条只追加记录。它把外部消息中的排查发现固定到计划、租约或判定上，但不持有任何业务状态，也不参与判定计算。
+
+- `id`：服务生成的稳定标识。
+- `sequence`：服务在提交顺序上分配的全局单调序号，从 1 开始且无空洞。
+- `target_type`：`plan`、`lease` 或 `assessment`。
+- `target_id`：被关联对象的标识，追加时对象必须存在。
+- `plan_id`：由关联对象解析出的所属计划，租约和判定批注自动归位到其计划时间线。
+- `category`：`observation`、`root_cause`、`action`、`decision` 或 `evidence`。
+- `body`：批注正文，最长 4000 个字符。
+- `actor`：记录人，最长 120 个字符。
+- `recorded_at`：服务时间，RFC3339。
+- `source`、`request_id`：由服务记录的操作事实（来源通道和请求标识），客户端不能覆盖。
+- `request_key`：可选幂等键，作用域为单个关联对象。
+- `fingerprint`：目标、类别、记录人和正文的稳定指纹。
+
 ## 4. 状态和规则
 
 ### 滚动计划状态
@@ -141,6 +158,16 @@ ready --lease--> leased --report--> ready
 - `serial_mismatch`
 - `success_ratio_below_minimum`
 - `latency_limit_exceeded`
+
+### 事故批注时间线
+
+- 时间线只追加：只有创建和读取入口，没有更新和删除入口。
+- 批注关联计划、租约或判定；写入事务先校验关联对象存在，悬空引用拒绝落库。
+- 批注不修改任何业务实体；判定计算器结构上不读取批注，任何计划状态下的批注都不能改变判定结论。
+- 所有追加在同一个互斥写事务内提交，按提交顺序分配全局 `sequence`；读取按序号升序，顺序确定。
+- 计划完成后仍可追加和查看批注；完成态只冻结业务操作，不冻结时间线。
+- 同关联对象上的 `request_key` 同键同内容重放返回原批注（HTTP 200），同键异载荷返回 `idempotency_conflict`；重放不产生新记录，历史不被覆盖。
+- 重启时按序号重排时间线、重建序号计数器和幂等索引，并逐条校验引用闭合；引用断裂的快照拒绝加载而不是静默丢历史。
 
 ## 5. 工作流
 
@@ -212,6 +239,29 @@ ready --lease--> leased --report--> ready
 
 失败行为：缺少区域版本、没有探针、请求键冲突或保存失败不会更新计划摘要。
 
+### W5 事故批注时间线
+
+入口：
+
+- `PUT /v1/annotations`
+- `GET /v1/annotations`
+- `GET /v1/annotations/{id}`
+- `GET /v1/plans/{id}/annotations`
+- `GET /v1/leases/{id}/annotations`
+- `GET /v1/assessments/{id}/annotations`
+
+步骤：
+
+1. HTTP 层严格解码 JSON；`source` 和 `request_id` 不由客户端提供。
+2. 批注服务规范化并校验目标类型、类别、正文和记录人。
+3. 存储层在写事务内校验关联对象存在，处理可选的 request_key 幂等重放。
+4. 在同一个事务内追加记录、分配序号并原子替换快照。
+5. 读取按序号升序返回，支持基于序号的游标分页和按计划、租约、判定筛选。
+
+成功行为：计划处于任何状态都可追加；重放返回原批注；时间线按确定顺序读取。
+
+失败行为：关联对象不存在、未知类别、空正文或同键异载荷不会修改状态。
+
 ## 6. 模块边界
 
 | 模块 | 路径 | 责任 |
@@ -223,6 +273,7 @@ ready --lease--> leased --report--> ready
 | allocation | `internal/allocation` | 节点筛选、幂等分配组和租约生命周期 |
 | probe | `internal/probe` | 探针校验、幂等写入和租约完成 |
 | assessment | `internal/assessment` | 探针聚合和一致性判定 |
+| annotation | `internal/annotation` | 只追加事故批注时间线的追加、幂等重放和顺序读取 |
 | domain | `internal/domain` | 聚合、值校验、状态迁移和纯计算 |
 | store | `internal/store` | 锁内副本事务和原子 JSON 持久化 |
 | platform | `internal/platform` | 时钟、标识、游标和文件锁 |
@@ -260,6 +311,12 @@ ready --lease--> leased --report--> ready
 - `PATCH /v1/leases/{id}/probes`
 - `PATCH /v1/plans/{id}/assessments`
 - `GET /v1/plans/{id}/assessments/latest`
+- `PUT /v1/annotations`
+- `GET /v1/annotations`
+- `GET /v1/annotations/{id}`
+- `GET /v1/plans/{id}/annotations`
+- `GET /v1/leases/{id}/annotations`
+- `GET /v1/assessments/{id}/annotations`
 
 ## 8. 工程机制
 
@@ -271,6 +328,7 @@ ready --lease--> leased --report--> ready
 - 错误传播：领域错误稳定映射到 HTTP 状态和错误代码。
 - 边界校验：DNS 名称、IP、序列号、延迟、比例、分页和能力均显式验证。
 - 并发入口：HTTP 处理器可并发运行，状态修改通过互斥锁串行化。
+- 只追加时间线：事故批注带提交序号，锁内串行追加，重启后重排、重建索引并校验引用闭合，不存在更新和删除路径。
 
 这些机制为后续工程任务提供了多个独立行为面，但本阶段不创建缺陷、不写测试，也不生成缺陷票据。
 
@@ -282,5 +340,6 @@ ready --lease--> leased --report--> ready
 2. 节点分配、租约唯一性、幂等重放和无可用节点冲突。
 3. 探针首写、同键重放、同键异载荷冲突和释放冲突。
 4. 一致性通过、审核触发、最新结果查询和幂等重放。
+5. 批注对计划、租约和判定的追加、悬空引用拒绝、并发确定排序、完成后可见性、重放闭合以及重启后时间线和引用保持。
 
 每条探针使用独立临时目录，不访问外部网络，结束后关闭服务。
