@@ -42,6 +42,23 @@ const (
 	EntryCNAME EntryType = "CNAME"
 )
 
+type AnnotationTargetType string
+
+const (
+	AnnotationTargetPlan       AnnotationTargetType = "plan"
+	AnnotationTargetLease      AnnotationTargetType = "lease"
+	AnnotationTargetAssessment AnnotationTargetType = "assessment"
+)
+
+type AnnotationCategory string
+
+const (
+	AnnotationObservation AnnotationCategory = "observation"
+	AnnotationHypothesis  AnnotationCategory = "hypothesis"
+	AnnotationAction      AnnotationCategory = "action"
+	AnnotationConclusion  AnnotationCategory = "conclusion"
+)
+
 type ZoneEntry struct {
 	Owner string    `json:"owner"`
 	Type  EntryType `json:"type"`
@@ -133,6 +150,20 @@ type RolloutAssessment struct {
 	CreatedAt        time.Time `json:"created_at"`
 }
 
+type IncidentAnnotation struct {
+	ID                 string               `json:"id"`
+	TargetType         AnnotationTargetType `json:"target_type"`
+	TargetID           string               `json:"target_id"`
+	PlanID             string               `json:"plan_id"`
+	Category           AnnotationCategory   `json:"category"`
+	Body               string               `json:"body"`
+	Author             string               `json:"author"`
+	RequestKey         string               `json:"request_key"`
+	Sequence           uint64               `json:"sequence"`
+	RecordedAt         time.Time            `json:"recorded_at"`
+	PayloadFingerprint string               `json:"payload_fingerprint"`
+}
+
 type AuditEvent struct {
 	ID         string         `json:"id"`
 	EntityType string         `json:"entity_type"`
@@ -154,6 +185,8 @@ type State struct {
 	Assessments           map[string]RolloutAssessment `json:"assessments"`
 	LeaseRequestKeys      map[string]string            `json:"lease_request_keys"`
 	AssessmentRequestKeys map[string]string            `json:"assessment_request_keys"`
+	Annotations           []IncidentAnnotation         `json:"annotations"`
+	AnnotationRequestKeys map[string]string            `json:"annotation_request_keys"`
 	AuditEvents           []AuditEvent                 `json:"audit_events"`
 }
 
@@ -170,4 +203,9 @@ type PlanPage struct {
 type NodePage struct {
 	Items []ResolverNode `json:"items"`
 	Meta  PageMeta       `json:"meta"`
+}
+
+type AnnotationPage struct {
+	Items []IncidentAnnotation `json:"items"`
+	Meta  PageMeta             `json:"meta"`
 }

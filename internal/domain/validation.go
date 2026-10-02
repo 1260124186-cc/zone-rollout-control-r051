@@ -16,6 +16,9 @@ const (
 	MinRequestKeyRunes = 8
 	MaxRequestKeyRunes = 64
 	MaxEntries         = 500
+	MaxAnnotationRunes = 2000
+	MaxAuthorRunes     = 64
+	MaxTargetIDRunes   = 128
 )
 
 type PlanCreateInput struct {
@@ -53,6 +56,15 @@ type ProbeInput struct {
 }
 
 type AssessmentInput struct {
+	RequestKey string `json:"request_key"`
+}
+
+type AnnotationInput struct {
+	TargetType string `json:"target_type"`
+	TargetID   string `json:"target_id"`
+	Category   string `json:"category"`
+	Body       string `json:"body"`
+	Author     string `json:"author"`
 	RequestKey string `json:"request_key"`
 }
 
@@ -247,6 +259,69 @@ func ValidateAssessmentInput(input AssessmentInput) error {
 		})
 	}
 	return nil
+}
+
+func NormalizeAnnotationInput(input AnnotationInput) AnnotationInput {
+	input.TargetType = strings.ToLower(strings.TrimSpace(input.TargetType))
+	input.TargetID = strings.TrimSpace(input.TargetID)
+	input.Category = strings.ToLower(strings.TrimSpace(input.Category))
+	input.Author = strings.TrimSpace(input.Author)
+	input.RequestKey = strings.TrimSpace(input.RequestKey)
+	return input
+}
+
+func ValidateAnnotationInput(input AnnotationInput) error {
+	details := make(map[string]any)
+	switch AnnotationTargetType(input.TargetType) {
+	case AnnotationTargetPlan, AnnotationTargetLease, AnnotationTargetAssessment:
+	default:
+		details["target_type"] = "must be one of plan, lease, or assessment"
+	}
+	if input.TargetID == "" {
+		details["target_id"] = "is required"
+	} else if utf8.RuneCountInString(input.TargetID) > MaxTargetIDRunes {
+		details["target_id"] = "must contain at most 128 characters"
+	}
+	switch AnnotationCategory(input.Category) {
+	case AnnotationObservation, AnnotationHypothesis, AnnotationAction, AnnotationConclusion:
+	default:
+		details["category"] = "must be one of observation, hypothesis, action, or conclusion"
+	}
+	if count := utf8.RuneCountInString(strings.TrimSpace(input.Body)); count == 0 {
+		details["body"] = "is required"
+	} else if count := utf8.RuneCountInString(input.Body); count > MaxAnnotationRunes {
+		details["body"] = "must contain at most 2000 characters"
+	}
+	if input.Author == "" {
+		details["author"] = "is required"
+	} else if utf8.RuneCountInString(input.Author) > MaxAuthorRunes {
+		details["author"] = "must contain at most 64 characters"
+	}
+	if err := validateRequestKey(input.RequestKey); err != nil {
+		details["request_key"] = err.Error()
+	}
+	if len(details) > 0 {
+		return Validation("annotation input is invalid", details)
+	}
+	return nil
+}
+
+func ValidAnnotationCategory(value string) bool {
+	switch AnnotationCategory(value) {
+	case AnnotationObservation, AnnotationHypothesis, AnnotationAction, AnnotationConclusion:
+		return true
+	default:
+		return false
+	}
+}
+
+func ValidAnnotationTargetType(value string) bool {
+	switch AnnotationTargetType(value) {
+	case AnnotationTargetPlan, AnnotationTargetLease, AnnotationTargetAssessment:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateRequestKey(value string) error {

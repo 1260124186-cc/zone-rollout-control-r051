@@ -39,6 +39,11 @@
       "responsibility": "probe aggregation, deterministic verdicts, and latest result reads"
     },
     {
+      "id": "annotation",
+      "path": "internal/annotation",
+      "responsibility": "append-only incident annotation timeline and reference resolution"
+    },
+    {
       "id": "domain",
       "path": "internal/domain",
       "responsibility": "entities, DNS value validation, transitions, and stable errors"
@@ -151,6 +156,26 @@
         "httpapi",
         "assessment",
         "probe",
+        "domain",
+        "storage"
+      ]
+    },
+    {
+      "id": "incident-annotations",
+      "name": "Incident annotation timeline",
+      "entry": "PUT /v1/annotations -> GET /v1/plans/{id}/annotations",
+      "steps": [
+        "validate category, body, author, and request key",
+        "resolve the plan, lease, or assessment target inside the lock",
+        "append one immutable entry with a monotonic sequence",
+        "read the timeline back in deterministic sequence order"
+      ],
+      "success": "annotations persist without touching business state, replay returns the original entry, and the timeline survives completion and restart",
+      "failure": "missing targets, invalid categories, and same-key different-content requests fail without appending",
+      "verification": "workflowprobe incident-annotations appends to all target types, replays, checks concurrent order, completes the plan, and restarts",
+      "module_ids": [
+        "httpapi",
+        "annotation",
         "domain",
         "storage"
       ]

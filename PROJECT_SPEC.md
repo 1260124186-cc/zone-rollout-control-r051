@@ -82,6 +82,22 @@ Zone Rollout Control 是面向 DNS 运维人员的 Go HTTP 控制面。它把区
 - `probe_count`、`success_count`、`success_ratio`、`maximum_latency_ms`。
 - `created_at`。
 
+### IncidentAnnotation
+
+事故排查过程中一条只追加的批注，关联计划、租约或判定。
+
+- `id`：服务生成的稳定标识。
+- `target_type`：`plan`、`lease` 或 `assessment`。
+- `target_id`：关联对象标识，写入时对象必须存在。
+- `plan_id`：由关联对象推导出的所属计划。
+- `category`：`observation`、`hypothesis`、`action` 或 `conclusion`。
+- `body`：批注正文，1 到 2000 字符。
+- `author`：记录人。
+- `request_key`：幂等请求键。
+- `sequence`：从 1 开始单调递增的追加序号。
+- `recorded_at`：服务记录的 RFC3339 时间。
+- `payload_fingerprint`：内容指纹，用于重放校验。
+
 ## 4. 状态和规则
 
 ### 滚动计划状态
@@ -141,6 +157,16 @@ ready --lease--> leased --report--> ready
 - `serial_mismatch`
 - `success_ratio_below_minimum`
 - `latency_limit_exceeded`
+
+### 事故批注时间线
+
+- 批注只追加：不提供修改或删除入口，历史不可抹除。
+- 批注关联的对象必须存在，否则返回 `not_found`。
+- 批注写入不改变计划、租约或判定的任何业务字段，也不参与判定计算。
+- 同目标同请求键同内容重放返回原批注；同键异内容返回 `idempotency_conflict`。
+- 追加在存储互斥锁内串行化并分配单调序号，读取始终按序号升序，并发追加顺序确定。
+- 计划完成后时间线仍可查看和追加，但批注永远不能影响判定结论。
+- 批注与关联引用随状态快照持久化，重启后保持闭合。
 
 ## 5. 工作流
 
@@ -212,6 +238,27 @@ ready --lease--> leased --report--> ready
 
 失败行为：缺少区域版本、没有探针、请求键冲突或保存失败不会更新计划摘要。
 
+### W5 事故批注时间线
+
+入口：
+
+- `PUT /v1/annotations`
+- `GET /v1/annotations/{id}`
+- `GET /v1/plans/{id}/annotations`
+- `GET /v1/leases/{id}/annotations`
+- `GET /v1/assessments/{id}/annotations`
+
+步骤：
+
+1. HTTP 层严格解码 JSON。
+2. 批注服务校验类别、正文、记录人和请求键。
+3. 存储层在锁内确认关联对象存在，分配单调序号并只追加写入。
+4. 读取按序号升序分页返回，计划完成后仍可查看。
+
+成功行为：批注带序号落库，重放返回原批注，时间线顺序确定。
+
+失败行为：关联对象缺失、类别非法、同键异内容或保存失败不会追加任何记录。
+
 ## 6. 模块边界
 
 | 模块 | 路径 | 责任 |
@@ -223,6 +270,7 @@ ready --lease--> leased --report--> ready
 | allocation | `internal/allocation` | 节点筛选、幂等分配组和租约生命周期 |
 | probe | `internal/probe` | 探针校验、幂等写入和租约完成 |
 | assessment | `internal/assessment` | 探针聚合和一致性判定 |
+| annotation | `internal/annotation` | 只追加事故批注时间线和引用解析 |
 | domain | `internal/domain` | 聚合、值校验、状态迁移和纯计算 |
 | store | `internal/store` | 锁内副本事务和原子 JSON 持久化 |
 | platform | `internal/platform` | 时钟、标识、游标和文件锁 |
@@ -260,6 +308,11 @@ ready --lease--> leased --report--> ready
 - `PATCH /v1/leases/{id}/probes`
 - `PATCH /v1/plans/{id}/assessments`
 - `GET /v1/plans/{id}/assessments/latest`
+- `PUT /v1/annotations`
+- `GET /v1/annotations/{id}`
+- `GET /v1/plans/{id}/annotations`
+- `GET /v1/leases/{id}/annotations`
+- `GET /v1/assessments/{id}/annotations`
 
 ## 8. 工程机制
 
@@ -282,5 +335,6 @@ ready --lease--> leased --report--> ready
 2. 节点分配、租约唯一性、幂等重放和无可用节点冲突。
 3. 探针首写、同键重放、同键异载荷冲突和释放冲突。
 4. 一致性通过、审核触发、最新结果查询和幂等重放。
+5. 批注追加、幂等重放、并发顺序、完成后只读可见和重启闭合。
 
 每条探针使用独立临时目录，不访问外部网络，结束后关闭服务。

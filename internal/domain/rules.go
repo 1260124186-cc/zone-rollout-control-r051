@@ -67,6 +67,20 @@ func ProbeFingerprint(leaseID string, input ProbeInput) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func AnnotationFingerprint(input AnnotationInput) string {
+	payload := fmt.Sprintf(
+		"%s|%s|%s|%s|%s|%s",
+		input.TargetType,
+		input.TargetID,
+		input.RequestKey,
+		input.Category,
+		input.Author,
+		input.Body,
+	)
+	sum := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(sum[:])
+}
+
 func BuildAssessment(
 	id string,
 	plan RolloutPlan,

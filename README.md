@@ -45,6 +45,7 @@ internal/fleet              解析节点档案服务
 internal/allocation         节点选择和租约生命周期
 internal/probe              探针登记、幂等重放和租约完成
 internal/assessment         一致性聚合和最新结果查询
+internal/annotation         只追加事故批注时间线
 internal/httpapi            HTTP 路由、中间件和响应映射
 internal/workflowprobe      真实 HTTP 路径验证
 ```
@@ -135,6 +136,27 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
   -d '{"request_key": "assess-request-0001"}'
 ```
 
+追加事故批注：
+
+```bash
+curl -sS -X PUT http://127.0.0.1:8090/v1/annotations \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "target_type": "plan",
+    "target_id": "<plan_id>",
+    "category": "observation",
+    "body": "edge resolvers reported stale serial during the rollout",
+    "author": "oncall.alice",
+    "request_key": "incident-note-0001"
+  }'
+```
+
+查看计划的事故批注时间线：
+
+```bash
+curl -sS http://127.0.0.1:8090/v1/plans/<plan_id>/annotations
+```
+
 ## API 概览
 
 成功响应：
@@ -178,6 +200,11 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
 | `PATCH` | `/v1/leases/{id}/probes` | 登记探针并完成租约 |
 | `PATCH` | `/v1/plans/{id}/assessments` | 创建一致性判定 |
 | `GET` | `/v1/plans/{id}/assessments/latest` | 查询最近判定 |
+| `PUT` | `/v1/annotations` | 追加事故批注（关联计划、租约或判定） |
+| `GET` | `/v1/annotations/{id}` | 查询单条批注 |
+| `GET` | `/v1/plans/{id}/annotations` | 按追加顺序查询计划时间线 |
+| `GET` | `/v1/leases/{id}/annotations` | 查询租约的批注 |
+| `GET` | `/v1/assessments/{id}/annotations` | 查询判定的批注 |
 
 ## 状态及失败行为
 
@@ -188,6 +215,8 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
 - 一个节点同一时刻最多有一个 `claimed` 租约。
 - 相同请求键和相同内容可安全重放；同键异载荷返回 `idempotency_conflict`。
 - 一致性判定综合节点覆盖率、序列号、成功比例和最大延迟，返回 `consistent` 或 `review_required`。
+- 事故批注只追加、不可修改或删除；关联对象必须存在；批注带单调序号，按追加顺序读取。
+- 批注不改变计划、租约或判定的业务状态，也不参与判定计算；计划完成后时间线仍可查看和追加。
 - 所有校验和冲突在快照替换前返回，不留下部分状态。
 
 ## 后续工程任务的行为边界
@@ -216,6 +245,7 @@ go run ./cmd/workflowprobe plan-revision-lifecycle
 go run ./cmd/workflowprobe node-lease-allocation
 go run ./cmd/workflowprobe probe-ingestion
 go run ./cmd/workflowprobe consistency-assessment
+go run ./cmd/workflowprobe incident-annotations
 ```
 
 探针不访问外部网络，也不依赖已有状态文件。
